@@ -5,6 +5,19 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Nome della release da pubblicare (es. v1.7.1). Vuoto = aggiorna solo "Ultima build".'
+        required: false
+        default: ""
+      note:
+        description: "Riga di descrizione della release (facoltativa)"
+        required: false
+        default: ""
+      prerelease:
+        description: "Segna come pre-release (beta)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -57,15 +70,74 @@ jobs:
           Copy-Item app/LEGGIMI.txt pkg/mp4todvd/
           Get-ChildItem -Recurse pkg | Select-Object FullName, Length
           Compress-Archive -Path pkg/mp4todvd -DestinationPath mp4todvd-windows.zip
+          $v = ([xml](Get-Content app/mp4todvd.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          "APPVER=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - uses: actions/upload-artifact@v4
         with:
           name: mp4todvd-windows
           path: mp4todvd-windows.zip
 
-      - name: Release (solo su tag v*)
-        if: startsWith(github.ref, 'refs/tags/v')
+      # Releases:
+      #   tag v*                              -> release con quel tag
+      #   avvio manuale con "Nome release"    -> release con quel nome
+      #   push su main / avvio manuale vuoto  -> aggiorna "Ultima build" (tag latest), link di download sempre uguale
+      - name: Pubblica la release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME mp4todvd-windows.zip --title $env:GITHUB_REF_NAME --notes "mp4todvd per Windows (exe + ffmpeg + dvdauthor)"
+          IN_RELEASE: ${{ github.event.inputs.release }}
+          IN_NOTE: ${{ github.event.inputs.note }}
+          IN_PRERELEASE: ${{ github.event.inputs.prerelease }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $asset = "mp4todvd-windows.zip"
+          $date = Get-Date -Format "dd/MM/yyyy HH:mm"
+          $rolling = $false
+
+          if ($env:GITHUB_REF -like "refs/tags/v*") {
+            $tag = $env:GITHUB_REF_NAME
+            $title = "mp4todvd $tag"
+          }
+          elseif (-not [string]::IsNullOrWhiteSpace($env:IN_RELEASE)) {
+            $tag = $env:IN_RELEASE.Trim()
+            $title = "mp4todvd $tag"
+          }
+          else {
+            $tag = "latest"
+            $title = "Ultima build ($date)"
+            $rolling = $true
+          }
+
+          $lines = @()
+          if (-not [string]::IsNullOrWhiteSpace($env:IN_NOTE)) { $lines += $env:IN_NOTE.Trim(); $lines += "" }
+          $lines += "Scompatta lo zip e apri mp4todvd.exe. Dentro c'e' gia' tutto (ffmpeg, dvdauthor, spumux): non serve installare niente."
+          $lines += ""
+          if ($rolling) { $lines += "Build automatica dell'ultimo commit su main - versione app $env:APPVER, aggiornata il $date." }
+          else { $lines += "Versione app $env:APPVER." }
+          $notesFile = "release-notes.md"
+          Set-Content -Path $notesFile -Value ($lines -join "`n") -Encoding utf8
+
+          gh release view $tag > $null 2>&1
+          $exists = ($LASTEXITCODE -eq 0)
+          $global:LASTEXITCODE = 0
+
+          if ($exists) {
+            Write-Host "Release '$tag' gia' presente: sostituisco il file e aggiorno le note."
+            gh release upload $tag $asset --clobber
+            if ($LASTEXITCODE -ne 0) { throw "upload del pacchetto nella release fallito" }
+            gh release edit $tag --title $title --notes-file $notesFile
+            if ($LASTEXITCODE -ne 0) { throw "aggiornamento della release fallito" }
+          }
+          else {
+            Write-Host "Creo la release '$tag'."
+            $ghArgs = @("release", "create", $tag, $asset, "--title", $title, "--notes-file", $notesFile, "--target", $env:GITHUB_SHA)
+            if ($env:IN_PRERELEASE -eq "true") { $ghArgs += "--prerelease" }
+            gh @ghArgs
+            if ($LASTEXITCODE -ne 0) { throw "creazione della release fallita" }
+          }
+
+          $repo = $env:GITHUB_REPOSITORY
+          Write-Host "Download: https://github.com/$repo/releases/download/$tag/$asset"
+          if ($rolling) { Write-Host "Link fisso: https://github.com/$repo/releases/latest/download/$asset" }
