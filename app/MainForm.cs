@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
@@ -32,6 +32,8 @@ namespace Mp4ToDvd
         ComboBox cbQuality, cbDrive, cbChapters, cbSpeed, cbSource, cbMenuTemplate;
         CheckBox chkTwoPass, chkMenu;
         NumericUpDown numCopies;
+        CrmSessione crm; CrmBanda banda;
+        readonly CrmImpostazioni crmImp = new CrmImpostazioni();
         TextBox txtLabel, txtIso, txtFolder, txtWork, txtLog, txtMenuTitle, txtMenuBg;
         Button btnIso, btnFolder, btnWork, btnMenuBg, btnMenuPreview;
         ProgressBar prg;
@@ -62,6 +64,11 @@ namespace Mp4ToDvd
             engine = new Engine(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "tools"));
             Build();
             LoadSettings();
+            // ── collegamento al CRM (stesse API di VHSCapture): banda in alto con il cliente e i DVD fatti/totali ──
+            crm = new CrmSessione(crmImp, imp => SaveSettings(), "1.8.0");
+            banda = new CrmBanda(crm, this);
+            Controls.Add(banda);
+            Shown += async (s, e) => { await crm.RiprendiUltimo(); };
             CheckTools();
             FormClosing += (s, e) =>
             {
@@ -100,6 +107,7 @@ namespace Mp4ToDvd
                     ["lastdir"] = lastDir,
                     ["win.x"] = b.X.ToString(), ["win.y"] = b.Y.ToString(), ["win.w"] = b.Width.ToString(), ["win.h"] = b.Height.ToString(),
                     ["win.max"] = WindowState == FormWindowState.Maximized ? "1" : "0",
+                    ["crm.attivo"] = crmImp.Attivo ? "1" : "0", ["crm.url"] = crmImp.Url ?? "", ["crm.token"] = crmImp.Token ?? "", ["crm.ultimo"] = crmImp.UltimoCliente.ToString(),
                 };
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
                 File.WriteAllLines(SettingsPath, kv.Select(x => x.Key + "=" + x.Value));
@@ -122,6 +130,7 @@ namespace Mp4ToDvd
                 Func<string, string, string> S = (k, d) => kv.ContainsKey(k) ? kv[k] : d;
                 Action<ComboBox, int> Sel = (cb, v) => { if (v >= 0 && v < cb.Items.Count) cb.SelectedIndex = v; };
 
+                crmImp.Attivo = I("crm.attivo", 0) == 1; crmImp.Url = S("crm.url", ""); crmImp.Token = S("crm.token", ""); crmImp.UltimoCliente = I("crm.ultimo", 0);
                 rbDvd9.Checked = I("dvd9", 0) == 1; rbDvd5.Checked = !rbDvd9.Checked;
                 rbNtsc.Checked = I("ntsc", 0) == 1; rbPal.Checked = !rbNtsc.Checked;
                 Sel(cbSource, I("source", 4));
@@ -618,7 +627,9 @@ namespace Mp4ToDvd
             };
         }
 
-        void RunJob(Func<string> work, string doneTitle)
+        void RunJob(Func<string> work, string doneTitle) => RunJob(work, doneTitle, null);
+
+        void RunJob(Func<string> work, string doneTitle, Action<bool> fine)
         {
             txtLog.Clear();
             SetRunning(true);
@@ -639,6 +650,7 @@ namespace Mp4ToDvd
                         SetProgress(1, "Fatto in " + sw.Elapsed.ToString(@"h\:mm\:ss"));
                         Notify();
                         MessageBox.Show(this, result + "\n\nTempo: " + sw.Elapsed.ToString(@"h\:mm\:ss"), doneTitle, MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        fine?.Invoke(true);
                     }
                     else if (error != null)
                     {
@@ -646,31 +658,37 @@ namespace Mp4ToDvd
                         SetProgress(0, "Errore");
                         Notify();
                         MessageBox.Show(this, error.Message, "mp4todvd — errore", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        fine?.Invoke(false);
                     }
-                    else { AppendLog("Annullato."); SetProgress(0, "Annullato"); }
+                    else { AppendLog("Annullato."); SetProgress(0, "Annullato"); fine?.Invoke(false); }
                 }));
             });
         }
 
-        void Start()
+        async void Start()
         {
             if (lstFiles.Items.Count == 0) { MessageBox.Show(this, "Aggiungi almeno un video.", "mp4todvd", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            if (!await crm.PreparaCliente(this)) return;      // per quale cliente del CRM? (se il collegamento è attivo)
             var job = BuildJob();
             if (job.Mode == OutputMode.Iso && string.IsNullOrWhiteSpace(job.OutputPath)) { MessageBox.Show(this, "Indica dove salvare la ISO.", "mp4todvd"); return; }
             if (job.Mode == OutputMode.Folder && string.IsNullOrWhiteSpace(job.OutputPath)) { MessageBox.Show(this, "Indica la cartella di destinazione.", "mp4todvd"); return; }
             if (job.Mode == OutputMode.Burn && Engine.ListRecorders().Count == 0) { MessageBox.Show(this, "Nessun masterizzatore trovato: scegli ISO o cartella.", "mp4todvd"); return; }
             if (job.Menu.Enabled && job.Menu.Template == 4 && !File.Exists(job.Menu.BackgroundImage)) { MessageBox.Show(this, "Per il menu con immagine personalizzata scegli un'immagine di sfondo valida.", "mp4todvd"); return; }
             PrepareEngineCallbacks();
-            RunJob(() => engine.Execute(job), "mp4todvd — fatto");
+            int pezzi = job.Mode == OutputMode.Burn ? Math.Max(1, job.Copies) : 1;     // ogni copia masterizzata è un DVD per il CRM
+            await crm.Inizio(job.Label);
+            RunJob(() => engine.Execute(job), "mp4todvd — fatto", async ok => { await crm.ChiediFine(this, pezzi, job.Label, !ok); });
         }
 
-        void BurnAgain()
+        async void BurnAgain()
         {
             if (engine.LastDvdDir == null) return;
             int drive = cbDrive.SelectedIndex, speed = new[] { 0, 2, 4, 6, 8, 12, 16 }[cbSpeed.SelectedIndex], copies = (int)numCopies.Value;
             if (MessageBox.Show(this, "Rimasterizzo l'ultimo DVD pronto (" + (engine.LastLabel ?? "") + ") senza ricodificare.\nInserisci un DVD vergine e premi OK.", "mp4todvd", MessageBoxButtons.OKCancel, MessageBoxIcon.Question) != DialogResult.OK) return;
+            if (!await crm.PreparaCliente(this)) return;
             PrepareEngineCallbacks();
-            RunJob(() => engine.BurnAgain(drive, speed, copies), "mp4todvd — fatto");
+            await crm.Inizio(engine.LastLabel ?? "");
+            RunJob(() => engine.BurnAgain(drive, speed, copies), "mp4todvd — fatto", async ok => { await crm.ChiediFine(this, Math.Max(1, copies), engine.LastLabel ?? "", !ok); });
         }
     }
 }
