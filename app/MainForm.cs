@@ -367,6 +367,34 @@ namespace Mp4ToDvd
             bottom.Controls.Add(txtLog, 0, 3);
             root.Controls.Add(bottom, 0, 4);
 
+            // la riga dei video non deve mai scendere sotto l'altezza della colonna di pulsanti (Aggiungi…Anteprima):
+            // se il 40% non basta (finestra bassa, banda CRM in alto) la riga prende il minimo necessario e il resto va al log
+            Action fitFilesRow = () =>
+            {
+                if (!root.IsHandleCreated) return;
+                int[] altezze = root.GetRowHeights();
+                if (altezze.Length < 5) return;
+                int spazio = altezze[0] + altezze[4];   // spazio che si dividono lista video (40%) e log (60%)
+                int minimo = fb.PreferredSize.Height + fb.Margin.Vertical + tf.Padding.Vertical
+                           + (gFiles.Height - gFiles.DisplayRectangle.Height) + gFiles.Margin.Vertical;
+                RowStyle rFiles = root.RowStyles[0], rLog = root.RowStyles[4];
+                if (spazio * 0.4f < minimo)
+                {
+                    if (rFiles.SizeType != SizeType.Absolute || (int)rFiles.Height != minimo)
+                    {
+                        rFiles.SizeType = SizeType.Absolute; rFiles.Height = minimo;
+                        rLog.SizeType = SizeType.Percent; rLog.Height = 100;
+                    }
+                }
+                else if (rFiles.SizeType != SizeType.Percent)
+                {
+                    rFiles.SizeType = SizeType.Percent; rFiles.Height = 40;
+                    rLog.SizeType = SizeType.Percent; rLog.Height = 60;
+                }
+            };
+            root.SizeChanged += (s, e) => fitFilesRow();
+            Load += (s, e) => fitFilesRow();
+
             LoadDrives();
         }
 
