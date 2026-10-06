@@ -2,7 +2,7 @@ name: build mp4todvd (Windows)
 
 on:
   push:
-    branches: [main]
+    branches: [main, master]
     tags: ["v*"]
   workflow_dispatch:
     inputs:
@@ -83,7 +83,7 @@ jobs:
       #   avvio manuale con "Nome release"    -> release con quel nome
       #   push su main / avvio manuale vuoto  -> aggiorna "Ultima build" (tag latest), link di download sempre uguale
       - name: Pubblica la release
-        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -118,6 +118,15 @@ jobs:
           else { $lines += "Versione app $env:APPVER." }
           $notesFile = "release-notes.md"
           Set-Content -Path $notesFile -Value ($lines -join "`n") -Encoding utf8
+
+          if ($rolling) {
+            # release incrementale numerata (come VHSCapture): v<major.minor dell'app>.<numero di esecuzione>
+            $mm = ($env:APPVER -split '\.')[0..1] -join '.'
+            $tagv = "v$mm.$env:GITHUB_RUN_NUMBER"
+            Write-Host "Creo la release incrementale '$tagv'."
+            gh release create $tagv $asset --title "mp4todvd $tagv" --notes-file $notesFile --target $env:GITHUB_SHA --latest
+            if ($LASTEXITCODE -ne 0) { throw "creazione della release incrementale fallita" }
+          }
 
           gh release view $tag > $null 2>&1
           $exists = ($LASTEXITCODE -eq 0)
