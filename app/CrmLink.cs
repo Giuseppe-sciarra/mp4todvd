@@ -7,7 +7,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
-using System.Text.Json;
+using System.Web.Script.Serialization;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 
@@ -33,6 +33,14 @@ namespace Mp4ToDvd
         public const string Azione = "masterizzato";      // "masterizzato" | "recuperato"
         public const string Verbo = "masterizzare";        // "masterizzare" | "recuperare"
         public const string Icona = "💿";        // 💿 | 📀
+    }
+
+    /// <summary>JSON con quello che c'è già in .NET Framework (System.Web.Extensions): niente pacchetti, niente binding redirect.</summary>
+    internal static class Js
+    {
+        static JavaScriptSerializer Nuovo() => new JavaScriptSerializer { MaxJsonLength = 50 * 1024 * 1024 };
+        public static string Serialize(object o) => Nuovo().Serialize(o);
+        public static T Deserialize<T>(string json) where T : class { try { return string.IsNullOrEmpty(json) ? null : Nuovo().Deserialize<T>(json); } catch { return null; } }
     }
 
     public class CrmLavoro
@@ -91,7 +99,6 @@ namespace Mp4ToDvd
     {
         readonly CrmImpostazioni s;
         readonly HttpClient http = new HttpClient { Timeout = TimeSpan.FromSeconds(8) };
-        static readonly JsonSerializerOptions Json = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
         static readonly string CodaFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), CrmInfo.App, "crm-coda.json");
 
         class Evento { public string Percorso { get; set; } = ""; public string Corpo { get; set; } = ""; }
@@ -107,7 +114,7 @@ namespace Mp4ToDvd
         public CrmClient(CrmImpostazioni imp)
         {
             s = imp;
-            try { if (File.Exists(CodaFile)) coda = JsonSerializer.Deserialize<List<Evento>>(File.ReadAllText(CodaFile)) ?? new List<Evento>(); } catch { coda = new List<Evento>(); }
+            try { if (File.Exists(CodaFile)) coda = Js.Deserialize<List<Evento>>(File.ReadAllText(CodaFile)) ?? new List<Evento>(); } catch { coda = new List<Evento>(); }
         }
 
         public bool Configurato => s.Configurato;
@@ -117,7 +124,7 @@ namespace Mp4ToDvd
         {
             var r = new HttpRequestMessage(m, (url ?? Base) + "/api/cattura/" + percorso);
             r.Headers.Authorization = new AuthenticationHeaderValue("Bearer", (token ?? s.Token ?? "").Trim());
-            if (corpo != null) r.Content = new StringContent(corpo is string str ? str : JsonSerializer.Serialize(corpo), Encoding.UTF8, "application/json");
+            if (corpo != null) r.Content = new StringContent(corpo is string str ? str : Js.Serialize(corpo), Encoding.UTF8, "application/json");
             return r;
         }
 
@@ -136,7 +143,7 @@ namespace Mp4ToDvd
                         return null;
                     }
                     Raggiungibile = true; UltimoErrore = "";
-                    return JsonSerializer.Deserialize<T>(testo, Json);
+                    return Js.Deserialize<T>(testo);
                 }
             }
             catch (Exception ex)
@@ -157,8 +164,8 @@ namespace Mp4ToDvd
                     string testo = await r.Content.ReadAsStringAsync();
                     if ((int)r.StatusCode == 401) return new KeyValuePair<bool, string>(false, "Il CRM ha rifiutato il token: generane uno nuovo in Controllo PC → 🔑 della postazione.");
                     if (!r.IsSuccessStatusCode) return new KeyValuePair<bool, string>(false, "Il CRM ha risposto " + (int)r.StatusCode + ".");
-                    using (var d = JsonDocument.Parse(testo))
-                        return new KeyValuePair<bool, string>(true, "Collegato: questo PC è «" + d.RootElement.GetProperty("postazione").GetString() + "» nel CRM.");
+                    var d = Js.Deserialize<Dictionary<string, object>>(testo);
+                    return new KeyValuePair<bool, string>(true, "Collegato: questo PC è «" + (d != null && d.ContainsKey("postazione") ? d["postazione"] : "") + "» nel CRM.");
                 }
             }
             catch (Exception ex) { return new KeyValuePair<bool, string>(false, "CRM non raggiungibile: " + ex.Message); }
@@ -191,7 +198,7 @@ namespace Mp4ToDvd
 
         // ── eventi che contano: inizio, fine, conteggio → coda su disco se il CRM non risponde ──
 
-        void SalvaCoda() { try { Directory.CreateDirectory(Path.GetDirectoryName(CodaFile)); File.WriteAllText(CodaFile, JsonSerializer.Serialize(coda)); } catch { } }
+        void SalvaCoda() { try { Directory.CreateDirectory(Path.GetDirectoryName(CodaFile)); File.WriteAllText(CodaFile, Js.Serialize(coda)); } catch { } }
 
         static Dictionary<string, object> ConEvento(Dictionary<string, object> corpo)
         {
@@ -203,7 +210,7 @@ namespace Mp4ToDvd
         /// <summary>Manda subito; se il CRM non risponde mette in coda (partirà da solo). Restituisce la risposta o null.</summary>
         public async Task<string> Manda(string percorso, Dictionary<string, object> corpo)
         {
-            string json = JsonSerializer.Serialize(ConEvento(corpo));
+            string json = Js.Serialize(ConEvento(corpo));
             await Svuota();
             if (InCoda == 0 && Configurato)
             {
@@ -246,7 +253,7 @@ namespace Mp4ToDvd
 
         public static T Leggi<T>(string json) where T : class
         {
-            try { return string.IsNullOrEmpty(json) ? null : JsonSerializer.Deserialize<T>(json, Json); } catch { return null; }
+            try { return string.IsNullOrEmpty(json) ? null : Js.Deserialize<T>(json); } catch { return null; }
         }
 
         public void Dispose() => http.Dispose();
@@ -437,15 +444,19 @@ namespace Mp4ToDvd
         readonly CrmSessione sess;
         readonly Form owner;
 
+        bool Scuro() { var c = owner != null ? owner.BackColor : SystemColors.Control; return (0.2126 * c.R + 0.7152 * c.G + 0.0722 * c.B) / 255.0 < 0.5; }
+        Color Tinta(Color chiaro, Color scuro) => Scuro() ? scuro : chiaro;
+
         public CrmBanda(CrmSessione sessione, Form proprietario)
         {
             sess = sessione; owner = proprietario;
             Dock = DockStyle.Top; Height = 44; Padding = new Padding(8, 6, 8, 6);
-            BackColor = Color.FromArgb(240, 236, 248);
             var flow = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, Padding = new Padding(0), Margin = new Padding(0) };
             flow.Controls.Add(bCliente); flow.Controls.Add(bConteggio); flow.Controls.Add(bOpz);
             lbl.Dock = DockStyle.Fill;
             Controls.Add(lbl); Controls.Add(flow);
+            foreach (var b in new[] { bCliente, bConteggio, bOpz }) { b.FlatAppearance.BorderSize = 1; b.Margin = new Padding(4, 0, 0, 0); b.Height = 30; }
+            owner.BackColorChanged += (s, e) => Aggiorna();   // cambio tema nel programma ospite
             bCliente.Click += async (s, e) => { if (!sess.Attivo) { sess.Impostazioni(owner); return; } if (sess.InCorso) { MessageBox.Show(owner, "C'è un lavoro in corso: cambia cliente quando ha finito.", CrmInfo.App); return; } await sess.ScegliCliente(owner); };
             bConteggio.Click += async (s, e) => { if (sess.Corrente == null) { MessageBox.Show(owner, "Prima scegli il cliente dal CRM.", CrmInfo.App); return; } await sess.Riconteggio(owner); };
             bOpz.Click += (s, e) => sess.Impostazioni(owner);
@@ -459,7 +470,17 @@ namespace Mp4ToDvd
             bool c = sess.Corrente != null;
             bConteggio.Visible = c;
             bCliente.Text = c ? "👤 Cambia cliente" : (sess.Attivo ? "👤 Cliente dal CRM" : "👤 Collega al CRM");
-            BackColor = sess.InCorso ? Color.FromArgb(255, 236, 214) : (c ? Color.FromArgb(224, 244, 232) : Color.FromArgb(240, 236, 248));
+            // sfondo: lavoro in corso = arancio, cliente scelto = verde, altrimenti neutro; tinte chiare o scure secondo il tema del programma
+            BackColor = sess.InCorso ? Tinta(Color.FromArgb(255, 236, 214), Color.FromArgb(74, 52, 30))
+                      : c ? Tinta(Color.FromArgb(224, 244, 232), Color.FromArgb(30, 62, 46))
+                          : Tinta(Color.FromArgb(240, 236, 248), Color.FromArgb(44, 42, 56));
+            lbl.ForeColor = Tinta(Color.FromArgb(34, 34, 34), Color.FromArgb(236, 236, 240));
+            foreach (var b in new[] { bCliente, bConteggio, bOpz })
+            {
+                b.BackColor = Tinta(Color.White, Color.FromArgb(64, 62, 78));
+                b.ForeColor = Tinta(Color.FromArgb(34, 34, 34), Color.FromArgb(236, 236, 240));
+                b.FlatAppearance.BorderColor = Tinta(Color.FromArgb(200, 196, 214), Color.FromArgb(96, 94, 112));
+            }
         }
     }
 
