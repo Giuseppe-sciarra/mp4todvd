@@ -4,6 +4,8 @@ App Windows (C# WinForms, .NET Framework 4.8 già in Windows 10/11) che converte
 (mp4/mkv/avi/...) in DVD-Video, con o senza menu, e lo masterizza / crea la ISO / lascia la VIDEO_TS.
 Tutto autocontenuto: `mp4todvd.exe` + `tools\` (ffmpeg, ffprobe, dvdauthor e spumux cross-compilati qui).
 
+**Download, guida e domande frequenti:** [tastieredigitali.tech/casi-studio/mp4todvd](https://tastieredigitali.tech/casi-studio/mp4todvd/)
+
 Pensata per i riversamenti da VHS registrati con OBS: riconosce il 1080p con la VHS dentro,
 deinterlaccia, e non deforma mai le proporzioni.
 
