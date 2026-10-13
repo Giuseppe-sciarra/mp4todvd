@@ -108,6 +108,7 @@ namespace Mp4ToDvd
                     ["win.x"] = b.X.ToString(), ["win.y"] = b.Y.ToString(), ["win.w"] = b.Width.ToString(), ["win.h"] = b.Height.ToString(),
                     ["win.max"] = WindowState == FormWindowState.Maximized ? "1" : "0",
                     ["crm.attivo"] = crmImp.Attivo ? "1" : "0", ["crm.url"] = crmImp.Url ?? "", ["crm.token"] = crmImp.Token ?? "", ["crm.ultimo"] = crmImp.UltimoCliente.ToString(),
+                    ["crm.cartella"] = crmImp.CartellaCliente ? "1" : "0",
                 };
                 Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath));
                 File.WriteAllLines(SettingsPath, kv.Select(x => x.Key + "=" + x.Value));
@@ -131,6 +132,7 @@ namespace Mp4ToDvd
                 Action<ComboBox, int> Sel = (cb, v) => { if (v >= 0 && v < cb.Items.Count) cb.SelectedIndex = v; };
 
                 crmImp.Attivo = I("crm.attivo", 0) == 1; crmImp.Url = S("crm.url", ""); crmImp.Token = S("crm.token", ""); crmImp.UltimoCliente = I("crm.ultimo", 0);
+                crmImp.CartellaCliente = I("crm.cartella", 1) == 1;
                 rbDvd9.Checked = I("dvd9", 0) == 1; rbDvd5.Checked = !rbDvd9.Checked;
                 rbNtsc.Checked = I("ntsc", 0) == 1; rbPal.Checked = !rbNtsc.Checked;
                 Sel(cbSource, I("source", 4));
@@ -700,12 +702,36 @@ namespace Mp4ToDvd
             var job = BuildJob();
             if (job.Mode == OutputMode.Iso && string.IsNullOrWhiteSpace(job.OutputPath)) { MessageBox.Show(this, "Indica dove salvare la ISO.", "mp4todvd"); return; }
             if (job.Mode == OutputMode.Folder && string.IsNullOrWhiteSpace(job.OutputPath)) { MessageBox.Show(this, "Indica la cartella di destinazione.", "mp4todvd"); return; }
+            if (job.Mode != OutputMode.Burn) job.OutputPath = ConCartellaCliente(job.OutputPath);
             if (job.Mode == OutputMode.Burn && Engine.ListRecorders().Count == 0) { MessageBox.Show(this, "Nessun masterizzatore trovato: scegli ISO o cartella.", "mp4todvd"); return; }
             if (job.Menu.Enabled && job.Menu.Template == 4 && !File.Exists(job.Menu.BackgroundImage)) { MessageBox.Show(this, "Per il menu con immagine personalizzata scegli un'immagine di sfondo valida.", "mp4todvd"); return; }
             PrepareEngineCallbacks();
             int pezzi = job.Mode == OutputMode.Burn ? Math.Max(1, job.Copies) : 1;     // ogni copia masterizzata è un DVD per il CRM
             await crm.Inizio(job.Label);
             RunJob(() => engine.Execute(job), "mp4todvd — fatto", async ok => { await crm.ChiediFine(this, pezzi, job.Label, !ok); });
+        }
+
+        /// <summary>
+        /// Cliente del CRM (come VHSCapture): la ISO o la cartella del DVD vanno dentro la cartella «Nome Cognome» del
+        /// cliente, nella stessa cartella scelta: D:\DVD\Matrimonio.iso → D:\DVD\Nome Cognome\Matrimonio.iso.
+        /// Le caselle restano come le hai scritte, così il cliente dopo non finisce dentro quello di prima.
+        /// </summary>
+        string ConCartellaCliente(string path)
+        {
+            string cli = crm.CartellaCliente();
+            if (cli == null || string.IsNullOrWhiteSpace(path)) return path;
+            try
+            {
+                string full = Path.GetFullPath(path.Trim().TrimEnd('\\', '/'));
+                string parent = Path.GetDirectoryName(full), leaf = Path.GetFileName(full);
+                if (string.IsNullOrEmpty(parent) || string.IsNullOrEmpty(leaf)) return path;
+                if (string.Equals(Path.GetFileName(parent), cli, StringComparison.OrdinalIgnoreCase)) return full;   // già dentro la cartella del cliente
+                string dir = Path.Combine(parent, cli);
+                Directory.CreateDirectory(dir);
+                AppendLog("Cliente " + cli + ": salvo in " + dir);
+                return Path.Combine(dir, leaf);
+            }
+            catch (Exception ex) { AppendLog("⚠ Cartella del cliente non creata (" + ex.Message + "): salvo dove indicato"); return path; }
         }
 
         async void BurnAgain()

@@ -14,6 +14,9 @@ ma con il suo tipo di lavoro: **i DVD da masterizzare** («N. VHS da conv. in DV
 - A fine lavoro chiede quanti DVD contare (con «Masterizza» propone il numero di copie): **Fatto, conta** · **Scarta**
   (il totale della scheda scende, il prezzo si ricalcola) · **Non contare**.
 - Annullato o errore → non si conta niente.
+- **Cartella del cliente** (come VHSCapture): con «ISO» o «Cartella» il risultato va dentro la cartella «Nome Cognome» del cliente,
+  nello stesso posto che hai scelto (`D:\DVD\Matrimonio.iso` → `D:\DVD\Nome Cognome\Matrimonio.iso`); le caselle restano come le
+  hai scritte. Con «Masterizza» non si salva niente. Si spegne nel ⚙ del collegamento al CRM.
 - Finiti i DVD del cliente lo dice e passa al prossimo. **🔢 Conteggio** corregge fatti/totali nel CRM.
 - Se la rete salta, gli eventi restano in coda su disco e partono da soli.
 

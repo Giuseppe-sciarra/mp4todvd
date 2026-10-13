@@ -92,6 +92,7 @@ namespace Mp4ToDvd
         public string Url = "";
         public string Token = "";
         public int UltimoCliente;          // id della scheda su cui si stava lavorando: «▶ Continua con…»
+        public bool CartellaCliente = true; // salva dentro la cartella «Nome Cognome» del cliente, come VHSCapture
         public bool Configurato => Attivo && !string.IsNullOrWhiteSpace(Url) && (Token ?? "").Trim().Length >= 20;
     }
 
@@ -341,6 +342,29 @@ namespace Mp4ToDvd
 
         public void Dimentica() { Corrente = null; SenzaCrm = false; Imp.UltimoCliente = 0; salva(Imp); Cambiato?.Invoke(); }
 
+        /// <summary>Nome della cartella del cliente («Nome Cognome», lo stesso che usa VHSCapture) oppure null:
+        /// CRM spento, lavoro senza cliente oppure opzione disattivata nel collegamento al CRM.</summary>
+        public string CartellaCliente()
+        {
+            if (!Cli.Configurato || Corrente == null || !Imp.CartellaCliente) return null;
+            string n = (Corrente.cartella ?? "").Trim();
+            if (n.Length == 0) n = (Corrente.cliente ?? "").Trim();
+            foreach (char c in Path.GetInvalidFileNameChars()) n = n.Replace(c.ToString(), "");
+            n = n.Trim().TrimEnd('.').Trim();
+            return n.Length == 0 ? null : n;
+        }
+
+        /// <summary>Dove salvare: dentro la cartella scelta, la sottocartella del cliente (creata se non c'è).
+        /// Se non si riesce a crearla si salva nella cartella scelta e lo si scrive nel registro, come VHSCapture.</summary>
+        public string Destinazione(string cartellaBase, Action<string> log = null)
+        {
+            string c = CartellaCliente();
+            if (c == null || string.IsNullOrWhiteSpace(cartellaBase)) return cartellaBase;
+            string dir = Path.Combine(cartellaBase, c);
+            try { Directory.CreateDirectory(dir); return dir; }
+            catch (Exception ex) { log?.Invoke("⚠ Cartella del cliente non creata (" + ex.Message + "): salvo nella cartella scelta"); return cartellaBase; }
+        }
+
         /// <summary>All'avvio del programma: ripropone il cliente di ieri, se ha ancora pezzi da fare.</summary>
         public async Task RiprendiUltimo()
         {
@@ -490,7 +514,7 @@ namespace Mp4ToDvd
         public CrmSettingsForm(CrmImpostazioni imp, CrmClient cli)
         {
             Text = CrmInfo.App + " — collegamento al CRM"; FormBorderStyle = FormBorderStyle.FixedDialog; MaximizeBox = false; MinimizeBox = false;
-            StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(560, 300); Font = new Font("Segoe UI", 10f);
+            StartPosition = FormStartPosition.CenterParent; ClientSize = new Size(560, 334); Font = new Font("Segoe UI", 10f);
             var chk = new CheckBox { Text = "Collegamento al CRM attivo", Checked = imp.Attivo, Location = new Point(20, 16), AutoSize = true };
             Controls.Add(chk);
             Controls.Add(new Label { Text = "Indirizzo del CRM", Location = new Point(20, 52), AutoSize = true });
@@ -498,12 +522,14 @@ namespace Mp4ToDvd
             Controls.Add(new Label { Text = "Token della postazione (Controllo PC → 🔑 della postazione; lo stesso di VHSCapture)", Location = new Point(20, 108), AutoSize = true });
             var tok = new TextBox { Text = imp.Token, Location = new Point(20, 130), Width = 520, UseSystemPasswordChar = true }; Controls.Add(tok);
             var esito = new Label { Location = new Point(20, 168), Size = new Size(520, 50), ForeColor = Color.DimGray }; Controls.Add(esito);
-            var bProva = new Button { Text = "🔌 Prova collegamento", Location = new Point(20, 240), AutoSize = true }; Controls.Add(bProva);
-            var bOk = new Button { Text = "💾 Salva", Location = new Point(360, 240), Width = 85, DialogResult = DialogResult.OK }; Controls.Add(bOk);
-            var bNo = new Button { Text = "Annulla", Location = new Point(455, 240), Width = 85, DialogResult = DialogResult.Cancel }; Controls.Add(bNo);
+            var chkCartella = new CheckBox { Text = "Salva nella cartella del cliente («Nome Cognome») dentro la cartella scelta", Checked = imp.CartellaCliente, Location = new Point(20, 226), AutoSize = true };
+            Controls.Add(chkCartella);
+            var bProva = new Button { Text = "🔌 Prova collegamento", Location = new Point(20, 274), AutoSize = true }; Controls.Add(bProva);
+            var bOk = new Button { Text = "💾 Salva", Location = new Point(360, 274), Width = 85, DialogResult = DialogResult.OK }; Controls.Add(bOk);
+            var bNo = new Button { Text = "Annulla", Location = new Point(455, 274), Width = 85, DialogResult = DialogResult.Cancel }; Controls.Add(bNo);
             AcceptButton = bOk; CancelButton = bNo;
             bProva.Click += async (s, e) => { esito.Text = "Provo…"; var r = await cli.Prova(url.Text, tok.Text); esito.ForeColor = r.Key ? Color.DarkGreen : Color.Firebrick; esito.Text = r.Value; };
-            bOk.Click += (s, e) => { imp.Attivo = chk.Checked; imp.Url = url.Text.Trim(); imp.Token = tok.Text.Trim(); };
+            bOk.Click += (s, e) => { imp.Attivo = chk.Checked; imp.Url = url.Text.Trim(); imp.Token = tok.Text.Trim(); imp.CartellaCliente = chkCartella.Checked; };
         }
     }
 
